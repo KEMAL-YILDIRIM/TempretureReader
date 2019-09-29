@@ -12,13 +12,17 @@ namespace BusinessLogic.Logic
     /// </summary>
     public class TyreTemperatureProcessor : ITyreTemperatureProcessor
     {
+
+        private const double Tolerance = 0.1;
+
         public IEnumerable<Tyre> Process(IEnumerable<double> temperatureReadings, TyrePlacementType tyrePlacementType)
         {
-            if (!temperatureReadings.Any())
+            var temperatureReadingsList = temperatureReadings.ToList();
+            if (!temperatureReadingsList.Any())
                 // todo: exception types could be implemented for a better understanding
                 throw new Exception("Given file doesn't contain valid data.");
 
-            var numberOfTemperatureReads = temperatureReadings.GroupBy(x => x);
+            var numberOfTemperatureReads = temperatureReadingsList.GroupBy(x => x);
 
             // Most repeated temperature should be the ambient temperature due to default readings of the sensor.
             var ambientTemperature = numberOfTemperatureReads
@@ -26,56 +30,60 @@ namespace BusinessLogic.Logic
                 .First();
 
             // If readings below 10 the readings should be false or not enough.
-            if (ambientTemperature.Key > temperatureReadings.Average()
+            if (ambientTemperature.Key > temperatureReadingsList.Average()
                 || ambientTemperature.Count() < 10)
                 throw new Exception("Given file contains inconsistent data.");
 
-            var listOfValues = temperatureReadings.ToList();
+            var listOfValues = temperatureReadingsList.ToList();
             List<(double, int, int)> flattenList = IndexedNumberOfTemperatureReadings(listOfValues);
 
-            // Should have at least 3 consequtive decreasing value to define the maximum temperature
-            var listOfTyres = new List<Tyre>();
+            // Should have at least 3 consecutive decreasing value to define the maximum temperature
+            var listOfTyre = new List<Tyre>();
             var tyreNumber = 1;
-            for (int i = 0; i < flattenList.Count - 2; i++)
+            for (var i = 0; i < flattenList.Count - 2; i++)
             {
-                if (flattenList[i].Item1 > flattenList[i + 1].Item1
-                    && flattenList[i + 1].Item1 > flattenList[i + 2].Item1
-                    && flattenList[i].Item1 - ambientTemperature.Key > 2
-                    && flattenList[i].Item2 > 2)
-                {
-                    var maximumTyreTemperature = flattenList[i].Item1;
-                    var valuesUpToMaximumTyreTemperature = flattenList.Take(i + 1);
-
-                    // Set next index to process the nex tyre.
-                    i = flattenList.FindIndex(item => item.Item3 > flattenList[i].Item3 && item.Item1 == ambientTemperature.Key);
-
-                    // Take the increasing temprature values from ambient to max to determine average
-                    var reverseList = valuesUpToMaximumTyreTemperature.Select(item => item.Item1).Reverse()
-                        .TakeWhile(item => item != ambientTemperature.Key);
-
-                    var averageTyreTemperature = reverseList.Concat(
-                        valuesUpToMaximumTyreTemperature.Select(item => item.Item1)
-                        .TakeWhile(item => item == ambientTemperature.Key))
-                        .Average();
+                if (!(flattenList[i].Item1 > flattenList[i + 1].Item1) ||
+                    !(flattenList[i + 1].Item1 > flattenList[i + 2].Item1) ||
+                    !(flattenList[i].Item1 - ambientTemperature.Key > 2) || flattenList[i].Item2 <= 2) continue;
 
 
-                    listOfTyres.Add(new Tyre
+                var maximumTyreTemperature = flattenList[i].Item1;
+                var valuesUpToMaximumTyreTemperature = flattenList.Take(i + 1);
+
+                // Set next index to process the nex tyre.
+                i = flattenList.FindIndex(item => item.Item3 > flattenList[i].Item3 && Math.Abs(item.Item1 - ambientTemperature.Key) < Tolerance);
+
+                // Take the increasing temperature values from ambient to max to determine average
+                var upToMaximumTyreTemperature = valuesUpToMaximumTyreTemperature.ToList();
+                var reverseList = upToMaximumTyreTemperature.Select(item => item.Item1).Reverse()
+                    .TakeWhile(predicate: item =>
                     {
-                        MaximumTyreTemperature = maximumTyreTemperature,
-                        AverageTyreTemperature = averageTyreTemperature,
-                        ReadDate = DateTime.Now,
-                        TyrePlacement = tyrePlacementType,
-                        TyreNumber = tyreNumber
+                        if (Math.Abs(item - ambientTemperature.Key) > Tolerance) return true;
+                        return false;
                     });
 
-                    tyreNumber++;
-                }
+                var averageTyreTemperature = reverseList.Concat(
+                        upToMaximumTyreTemperature.Select(item => item.Item1)
+                            .TakeWhile(item => Math.Abs(item - ambientTemperature.Key) < Tolerance))
+                    .Average();
+
+
+                listOfTyre.Add(new Tyre
+                {
+                    MaximumTyreTemperature = maximumTyreTemperature,
+                    AverageTyreTemperature = averageTyreTemperature,
+                    ReadDate = DateTime.Now,
+                    TyrePlacement = tyrePlacementType,
+                    TyreNumber = tyreNumber
+                });
+
+                tyreNumber++;
             }
 
-            if (listOfTyres.Count() == 0)
+            if (listOfTyre.Any())
                 throw new Exception("Given file contains inconsistent data.");
 
-            return listOfTyres;
+            return listOfTyre;
         }
 
         /// <summary>
@@ -87,26 +95,29 @@ namespace BusinessLogic.Logic
         {
             var flattenList = new List<ValueTuple<double, int, int>>();
             int repeat = 1, flattenIndex = 0;
-            for (int i = 0; i < listOfValues.Count - 1; i++)
+            for (var i = 0; i < listOfValues.Count - 1; i++)
             {
                 var current = listOfValues[i];
                 var next = listOfValues[i + 1];
 
                 if (i == listOfValues.Count - 2)
                 {
-                    if (current == listOfValues.Last()) repeat++;
+                    if (Math.Abs(current - listOfValues.Last()) < Tolerance) repeat++;
                     else repeat = 1;
                     flattenList.Add((listOfValues[i], repeat, flattenIndex));
                 }
-                else if (current == next)
-                {
-                    repeat++;
-                }
                 else
                 {
-                    flattenList.Add((listOfValues[i], repeat, flattenIndex));
-                    repeat = 1;
-                    flattenIndex++;
+                    if (Math.Abs(current - next) < Tolerance)
+                    {
+                        repeat++;
+                    }
+                    else
+                    {
+                        flattenList.Add((listOfValues[i], repeat, flattenIndex));
+                        repeat = 1;
+                        flattenIndex++;
+                    }
                 }
             }
 
